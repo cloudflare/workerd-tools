@@ -1,0 +1,124 @@
+name: Build LLVM
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'LLVM version to build'
+        default: '18.1.8'
+
+permissions:
+  contents: write
+
+env:
+  LLVM_VERSION: ${{ inputs.version }} 
+  LLVM_TARGETS: 'clang-format'
+  LLVM_BINS: 'clang-format'
+  LLVM_LIBS: ''
+  ZIG_VERSION: '0.14.0-dev.1651+ffd071f55'
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Github release
+        run: |
+          gh release create -R ${{ github.repository }} llvm-$LLVM_VERSION || true
+        env:
+          GITHUB_TOKEN: ${{ github.TOKEN }}
+  build:
+    needs: create-release
+    strategy:
+      matrix:
+        platform:
+          - os: darwin-arm64
+            runner: macos-latest
+            toolchain: default
+            BIN_SUFFIX: ''
+            SO_SUFFIX: '${{ inputs.version }}.dylib'
+            STATIC_LIB_SUFFIX: 'a'
+            LLVM_TARGETS_TO_BUILD: 'ARM'
+          - os: linux-amd64
+            runner: ubuntu-latest
+            toolchain: default
+            BIN_SUFFIX: ''
+            SO_SUFFIX: 'so.${{ inputs.version }}'
+            STATIC_LIB_SUFFIX: 'a'
+            LLVM_TARGETS_TO_BUILD: 'X86'
+          - os: linux-arm64
+            runner: ubuntu-latest
+            toolchain: zig-linux-arm64
+            BIN_SUFFIX: ''
+            SO_SUFFIX: 'so.${{ inputs.version }}'
+            STATIC_LIB_SUFFIX: 'a'
+            LLVM_TARGETS_TO_BUILD: 'ARM'
+          - os: windows-amd64
+            runner: windows-latest
+            toolchain: default
+            TAR_ARGS: '--exclude=*/clang/test/Driver/Inputs/* --exclude=*/libcxx/test/std/input.output/filesystems/Inputs/static_test_env/* --exclude=*/libclc/amdgcn-mesa3d'
+            BIN_SUFFIX: '.exe'
+            SO_SUFFIX: 'dll'
+            STATIC_LIB_SUFFIX: 'lib'
+            LLVM_TARGETS_TO_BUILD: 'X86'
+    runs-on: ${{ matrix.platform.runner }}
+    name: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup for macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja
+      - name: Setup for Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y cmake ninja-build
+      - name: Setup for Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install cmake ninja curl
+      - name: Get zig toolchain
+        if: startsWith(matrix.platform.toolchain, 'zig')
+        run: |
+            curl -L https://ziglang.org/builds/zig-linux-x86_64-$ZIG_VERSION.tar.xz -o zig.tar.xz
+            mkdir zig
+            tar -C zig --strip-components=1 -xJf zig.tar.xz
+            cd zig
+            pwd >> $GITHUB_PATH
+      - name: Get llvm
+        shell: bash
+        run: |
+          curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/llvm-project-$LLVM_VERSION.src.tar.xz -o llvm.tar.xz
+          mkdir llvm
+          tar -C llvm --strip-components=1 ${{ matrix.platform.TAR_ARGS }} -xJf llvm.tar.xz
+      - name: Generate build files
+        shell: bash
+        run: |
+          cd llvm
+          cmake -B build llvm -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/build/llvm/${{ matrix.platform.toolchain }}.cmake \ 
+            $(cat $GITHUB_WORKSPACE/build/llvm/common.args) \
+            -DLLVM_TARGETS_TO_BUILD=${{ matrix.platform.LLVM_TARGETS_TO_BUILD }}
+      - name: Build targets
+        shell: bash
+        run: |
+          cd llvm/build
+          ninja $LLVM_TARGETS
+      - name: Upload products
+        shell: bash
+        run: |
+          cd llvm/build/bin
+          for BIN in $LLVM_BINS; do
+            FILENAME=llvm-$LLVM_VERSION-${{ matrix.platform.os }}-$BIN${{ matrix.platform.BIN_SUFFIX }}
+            mv $BIN${{ matrix.platform.BIN_SUFFIX }} $FILENAME 
+            gh release upload -R ${{ github.repository }} llvm-$LLVM_VERSION $FILENAME || true
+          done
+
+          cd ../lib
+          for LIB in $LLVM_LIBS; do
+            FILENAME=llvm-$LLVM_VERSION-${{ matrix.platform.os }}-$LIB.${{ matrix.platform.SO_SUFFIX }}
+            mv $LIB.${{ matrix.platform.SO_SUFFIX }} $FILENAME
+            gh release upload -R ${{ github.repository }} llvm-$LLVM_VERSION $FILENAME || true
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.TOKEN }}
+
+      
