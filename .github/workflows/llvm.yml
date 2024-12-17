@@ -15,7 +15,7 @@ env:
   LLVM_TARGETS: 'clang-format'
   LLVM_BINS: 'clang-format'
   LLVM_LIBS: ''
-  ZIG_VERSION: '0.14.0-dev.1651+ffd071f55'
+  ZIG_VERSION: '0.14.0-dev.2487+af89bb05d'
 jobs:
   create-release:
     runs-on: ubuntu-latest
@@ -36,21 +36,21 @@ jobs:
             BIN_SUFFIX: ''
             SO_SUFFIX: '${{ inputs.version }}.dylib'
             STATIC_LIB_SUFFIX: 'a'
-            LLVM_TARGETS_TO_BUILD: 'ARM'
+            LLVM_TARGETS_TO_BUILD: 'AArch64'
           - os: linux-amd64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             toolchain: default
             BIN_SUFFIX: ''
             SO_SUFFIX: 'so.${{ inputs.version }}'
             STATIC_LIB_SUFFIX: 'a'
             LLVM_TARGETS_TO_BUILD: 'X86'
           - os: linux-arm64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             toolchain: zig-linux-arm64
             BIN_SUFFIX: ''
             SO_SUFFIX: 'so.${{ inputs.version }}'
             STATIC_LIB_SUFFIX: 'a'
-            LLVM_TARGETS_TO_BUILD: 'ARM'
+            LLVM_TARGETS_TO_BUILD: 'AArch64'
           - os: windows-amd64
             runner: windows-latest
             toolchain: default
@@ -77,8 +77,10 @@ jobs:
           choco install cmake ninja curl
       - name: Get zig toolchain
         if: startsWith(matrix.platform.toolchain, 'zig')
+        shell: bash
         run: |
-            curl -L https://ziglang.org/builds/zig-linux-x86_64-$ZIG_VERSION.tar.xz -o zig.tar.xz
+            echo "zig is $ZIG_VERSION"
+            curl -L https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz -o zig.tar.xz
             mkdir zig
             tar -C zig --strip-components=1 -xJf zig.tar.xz
             cd zig
@@ -93,15 +95,12 @@ jobs:
         shell: bash
         run: |
           cd llvm
-          cmake -B build llvm -GNinja \
-            -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/build/llvm/${{ matrix.platform.toolchain }}.cmake \ 
-            $(cat $GITHUB_WORKSPACE/build/llvm/common.args) \
-            -DLLVM_TARGETS_TO_BUILD=${{ matrix.platform.LLVM_TARGETS_TO_BUILD }}
+          cmake -B build llvm -GNinja -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/build/llvm/${{ matrix.platform.toolchain }}.cmake $(cat $GITHUB_WORKSPACE/build/llvm/common.args) -DLLVM_TARGETS_TO_BUILD=${{ matrix.platform.LLVM_TARGETS_TO_BUILD }}
       - name: Build targets
         shell: bash
         run: |
           cd llvm/build
-          ninja $LLVM_TARGETS
+          ninja $LLVM_TARGETS # Ninja automatically builds in parallel
       - name: Upload products
         shell: bash
         run: |
