@@ -1,0 +1,30 @@
+name: Release WPT
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit or branch name to fetch'
+        default: master
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout WPT
+        uses: actions/checkout@v4
+        with:
+          repository: 'web-platform-tests/wpt'
+          ref: ${{ inputs.ref }}
+      - name: Create Github Release
+        shell: bash
+        run: |
+          RELEASE_NAME=wpt-$(git rev-parse --short HEAD)
+          gh release create -R ${{ github.repository }} $RELEASE_NAME || true
+          git archive --prefix=$RELEASE_NAME/ -o $RELEASE_NAME.tar.gz HEAD '*.js' '*.json' '*.md'
+          gh release upload -R ${{ github.repository }} $RELEASE_NAME $RELEASE_NAME.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ github.TOKEN }}
