@@ -22,7 +22,7 @@ jobs:
       - name: Create Github Release
         shell: bash
         run: |
-	  # Excludes ~70% of files, making this archive faster to process
+          # Excludes ~70% of files, making this archive faster to process
           FILE_FILTER=(':(exclude)css' ':(exclude)html' ':(exclude)conformance-checkers' ':(exclude)svg')
 
           RELEASE_NAME=wpt-$(git rev-parse --short HEAD)
