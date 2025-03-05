@@ -22,9 +22,12 @@ jobs:
       - name: Create Github Release
         shell: bash
         run: |
+	  # Excludes ~70% of files, making this archive faster to process
+          FILE_FILTER=(':(exclude)css' ':(exclude)html' ':(exclude)conformance-checkers' ':(exclude)svg')
+
           RELEASE_NAME=wpt-$(git rev-parse --short HEAD)
           gh release create -R ${{ github.repository }} $RELEASE_NAME || true
-          git archive --prefix=$RELEASE_NAME/ -o $RELEASE_NAME.tar.gz HEAD '*.js' '*.json' '*.md'
+          git archive --prefix=$RELEASE_NAME/ -o $RELEASE_NAME.tar.gz HEAD $FILE_FILTER
           gh release upload -R ${{ github.repository }} $RELEASE_NAME $RELEASE_NAME.tar.gz
         env:
           GITHUB_TOKEN: ${{ github.TOKEN }}
