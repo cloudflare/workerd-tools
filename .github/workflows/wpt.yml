@@ -1,6 +1,9 @@
 name: Release WPT
 
 on:
+  schedule:
+    # Runs at 00:15, only on Sunday.
+    - cron: "15 00 * * 0" 
   workflow_dispatch:
     inputs:
       ref:
