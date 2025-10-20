@@ -6,23 +6,26 @@ on:
       version:
         description: 'LLVM version to build'
         default: '18.1.8'
+      target:
+        description: 'LLVM binary to build'
+        default: 'clang-format'
 
 permissions:
   contents: write
 
 env:
-  LLVM_VERSION: ${{ inputs.version }} 
-  LLVM_TARGETS: 'clang-format'
-  LLVM_BINS: 'clang-format'
+  LLVM_VERSION: ${{ inputs.version }}
+  LLVM_TARGETS: ${{ inputs.target }}
+  LLVM_BINS: ${{ inputs.target }}
   LLVM_LIBS: ''
-  ZIG_VERSION: '0.14.0-dev.2487+af89bb05d'
+  ZIG_VERSION: '0.15.2'
 jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
       - name: Create Github release
         run: |
-          gh release create -R ${{ github.repository }} llvm-$LLVM_VERSION || true
+          gh release create -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION || true
         env:
           GITHUB_TOKEN: ${{ github.TOKEN }}
   build:
@@ -80,7 +83,8 @@ jobs:
         shell: bash
         run: |
             echo "zig is $ZIG_VERSION"
-            curl -L https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz -o zig.tar.xz
+            curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz -o zig.tar.xz
+
             mkdir zig
             tar -C zig --strip-components=1 -xJf zig.tar.xz
             cd zig
@@ -107,17 +111,16 @@ jobs:
           cd llvm/build/bin
           for BIN in $LLVM_BINS; do
             FILENAME=llvm-$LLVM_VERSION-${{ matrix.platform.os }}-$BIN${{ matrix.platform.BIN_SUFFIX }}
-            mv $BIN${{ matrix.platform.BIN_SUFFIX }} $FILENAME 
-            gh release upload -R ${{ github.repository }} llvm-$LLVM_VERSION $FILENAME || true
+            mv $BIN${{ matrix.platform.BIN_SUFFIX }} $FILENAME
+            gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION $FILENAME || true
           done
 
           cd ../lib
           for LIB in $LLVM_LIBS; do
             FILENAME=llvm-$LLVM_VERSION-${{ matrix.platform.os }}-$LIB.${{ matrix.platform.SO_SUFFIX }}
             mv $LIB.${{ matrix.platform.SO_SUFFIX }} $FILENAME
-            gh release upload -R ${{ github.repository }} llvm-$LLVM_VERSION $FILENAME || true
+            gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION $FILENAME || true
           done
         env:
           GITHUB_TOKEN: ${{ github.TOKEN }}
 
-      
