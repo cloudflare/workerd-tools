@@ -57,7 +57,8 @@ jobs:
           - os: windows-amd64
             runner: windows-latest
             toolchain: default
-            TAR_ARGS: '--exclude=*/clang/test/Driver/Inputs/* --exclude=*/libcxx/test/std/input.output/filesystems/Inputs/static_test_env/* --exclude=*/libclc/amdgcn-mesa3d'
+            # Exclude directories with links, which Windows can't handle
+            TAR_ARGS: '--exclude=*/clang/test/Driver/Inputs/* --exclude=*/libcxx/test/std/input.output/filesystems/Inputs/static_test_env/* --exclude=*/libclc/amdgcn-mesa3d --exclude=*/llvm/utils/mlgo-utils/*'
             BIN_SUFFIX: '.exe'
             SO_SUFFIX: 'dll'
             STATIC_LIB_SUFFIX: 'lib'
