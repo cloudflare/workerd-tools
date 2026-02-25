@@ -9,12 +9,16 @@ on:
       target:
         description: 'LLVM binary to build'
         default: 'clang-format'
+      patch_suffix:
+        description: 'Suffix for patched builds (e.g. -cf1), appended to version in release tag and binary names'
+        default: ''
 
 permissions:
   contents: write
 
 env:
   LLVM_VERSION: ${{ inputs.version }}
+  LLVM_RELEASE_VERSION: ${{ inputs.version }}${{ inputs.patch_suffix }}
   LLVM_TARGETS: ${{ inputs.target }}
   LLVM_BINS: ${{ inputs.target }}
   LLVM_LIBS: ''
@@ -25,7 +29,7 @@ jobs:
     steps:
       - name: Create Github release
         run: |
-          gh release create -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION || true
+          gh release create -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_RELEASE_VERSION || true
         env:
           GITHUB_TOKEN: ${{ github.TOKEN }}
   build:
@@ -96,6 +100,15 @@ jobs:
           curl -L https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/llvm-project-$LLVM_VERSION.src.tar.xz -o llvm.tar.xz
           mkdir llvm
           tar -C llvm --strip-components=1 ${{ matrix.platform.TAR_ARGS }} -xJf llvm.tar.xz
+      - name: Apply patches
+        shell: bash
+        run: |
+          cd llvm
+          for patch in $GITHUB_WORKSPACE/build/llvm/patches/*.patch; do
+            [ -f "$patch" ] || continue
+            echo "Applying $(basename $patch)..."
+            patch -p1 < "$patch"
+          done
       - name: Generate build files
         shell: bash
         run: |
@@ -111,16 +124,16 @@ jobs:
         run: |
           cd llvm/build/bin
           for BIN in $LLVM_BINS; do
-            FILENAME=llvm-$LLVM_VERSION-${{ matrix.platform.os }}-$BIN${{ matrix.platform.BIN_SUFFIX }}
+            FILENAME=llvm-$LLVM_RELEASE_VERSION-${{ matrix.platform.os }}-$BIN${{ matrix.platform.BIN_SUFFIX }}
             mv $BIN${{ matrix.platform.BIN_SUFFIX }} $FILENAME
-            gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION $FILENAME || true
+            gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_RELEASE_VERSION $FILENAME || true
           done
 
           cd ../lib
           for LIB in $LLVM_LIBS; do
-            FILENAME=llvm-$LLVM_VERSION-${{ matrix.platform.os }}-$LIB.${{ matrix.platform.SO_SUFFIX }}
+            FILENAME=llvm-$LLVM_RELEASE_VERSION-${{ matrix.platform.os }}-$LIB.${{ matrix.platform.SO_SUFFIX }}
             mv $LIB.${{ matrix.platform.SO_SUFFIX }} $FILENAME
-            gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION $FILENAME || true
+            gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_RELEASE_VERSION $FILENAME || true
           done
         env:
           GITHUB_TOKEN: ${{ github.TOKEN }}

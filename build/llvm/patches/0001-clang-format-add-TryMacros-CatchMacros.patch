@@ -1,0 +1,354 @@
+From ea1911fe595953056caec27918f2f45baaabc6c4 Mon Sep 17 00:00:00 2001
+From: Harris Hancock <harris@cloudflare.com>
+Date: Wed, 25 Feb 2026 12:05:56 +0000
+Subject: [PATCH] clang-format: add TryMacros/CatchMacros options for
+ try/catch-like macros
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add TryMacros and CatchMacros configuration options that allow macros to
+be formatted like native try/catch blocks. This enables proper handling
+of custom exception macros such as KJ_TRY/KJ_CATCH and JSG_TRY/JSG_CATCH
+used in the Cloudflare Workers runtime.
+
+The implementation:
+- Adds TT_TryMacro and TT_CatchMacro token types
+- Remaps macro identifiers to tok::kw_try / tok::kw_catch during lexing
+  so they flow through the existing parseTryCatch() structural parsing
+- Extends parseTryCatch() to skip parenthesized macro arguments (e.g.
+  JSG_TRY(js) has arguments while KJ_TRY does not)
+- Prevents tryTransformTryUsageForC() from resetting TryMacros back to
+  tok::identifier when followed by '(' — the root cause of a bug where
+  try macros with arguments (like JSG_TRY(js)) failed to cuddle their
+  catch blocks
+- Suppresses space before '(' for try/catch macros so they look like
+  macro invocations rather than keywords
+- Preserves TT_TryMacro/TT_CatchMacro through the TokenAnnotator pass
+
+Example output:
+  JSG_TRY(js) {
+    doStuff();
+  } JSG_CATCH(e, js) {
+    handleError();
+  }
+
+Native try/catch formatting is completely unaffected.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ clang/include/clang/Format/Format.h        | 42 ++++++++++++
+ clang/lib/Format/Format.cpp                |  2 +
+ clang/lib/Format/FormatToken.h             |  2 +
+ clang/lib/Format/FormatTokenLexer.cpp      | 16 +++++
+ clang/lib/Format/TokenAnnotator.cpp        |  8 ++-
+ clang/lib/Format/UnwrappedLineParser.cpp   |  4 ++
+ clang/unittests/Format/ConfigParseTest.cpp | 12 ++++
+ clang/unittests/Format/FormatTest.cpp      | 78 ++++++++++++++++++++++
+ 8 files changed, 163 insertions(+), 1 deletion(-)
+
+diff --git a/clang/include/clang/Format/Format.h b/clang/include/clang/Format/Format.h
+index efcb4e1d8..5e141c9f0 100644
+--- a/clang/include/clang/Format/Format.h
++++ b/clang/include/clang/Format/Format.h
+@@ -2202,6 +2202,26 @@ struct FormatStyle {
+   /// \version 3.9
+   bool BreakStringLiterals;
+ 
++  /// A vector of macros that should be interpreted as catch blocks
++  /// instead of as function calls.
++  ///
++  /// These are expected to be macros of the form:
++  /// \code
++  ///   KJ_TRY {
++  ///     ...
++  ///   } KJ_CATCH(e) {
++  ///     ...
++  ///   }
++  /// \endcode
++  ///
++  /// In the .clang-format configuration file, this can be configured like:
++  /// \code{.yaml}
++  ///   CatchMacros: ['KJ_CATCH', 'JSG_CATCH']
++  /// \endcode
++  ///
++  /// \version 18
++  std::vector<std::string> CatchMacros;
++
+   /// The column limit.
+   ///
+   /// A column limit of ``0`` means that there is no column limit. In this case,
+@@ -4695,6 +4715,26 @@ struct FormatStyle {
+   /// \version 9
+   std::vector<std::string> TypenameMacros;
+ 
++  /// A vector of macros that should be interpreted as try blocks
++  /// instead of as function calls.
++  ///
++  /// These are expected to be macros of the form:
++  /// \code
++  ///   KJ_TRY {
++  ///     ...
++  ///   } KJ_CATCH(e) {
++  ///     ...
++  ///   }
++  /// \endcode
++  ///
++  /// In the .clang-format configuration file, this can be configured like:
++  /// \code{.yaml}
++  ///   TryMacros: ['KJ_TRY', 'JSG_TRY']
++  /// \endcode
++  ///
++  /// \version 18
++  std::vector<std::string> TryMacros;
++
+   /// This option is **deprecated**. See ``LF`` and ``CRLF`` of ``LineEnding``.
+   /// \version 10
+   // bool UseCRLF;
+@@ -4803,6 +4843,7 @@ struct FormatStyle {
+            BreakConstructorInitializers == R.BreakConstructorInitializers &&
+            BreakInheritanceList == R.BreakInheritanceList &&
+            BreakStringLiterals == R.BreakStringLiterals &&
++           CatchMacros == R.CatchMacros &&
+            ColumnLimit == R.ColumnLimit && CommentPragmas == R.CommentPragmas &&
+            CompactNamespaces == R.CompactNamespaces &&
+            ConstructorInitializerIndentWidth ==
+@@ -4913,6 +4954,7 @@ struct FormatStyle {
+            Standard == R.Standard &&
+            StatementAttributeLikeMacros == R.StatementAttributeLikeMacros &&
+            StatementMacros == R.StatementMacros && TabWidth == R.TabWidth &&
++           TryMacros == R.TryMacros &&
+            TypeNames == R.TypeNames && TypenameMacros == R.TypenameMacros &&
+            UseTab == R.UseTab &&
+            VerilogBreakBetweenInstancePorts ==
+diff --git a/clang/lib/Format/Format.cpp b/clang/lib/Format/Format.cpp
+index 10fe35c79..d98f48a7c 100644
+--- a/clang/lib/Format/Format.cpp
++++ b/clang/lib/Format/Format.cpp
+@@ -968,6 +968,7 @@ template <> struct MappingTraits<FormatStyle> {
+                    Style.BreakConstructorInitializers);
+     IO.mapOptional("BreakInheritanceList", Style.BreakInheritanceList);
+     IO.mapOptional("BreakStringLiterals", Style.BreakStringLiterals);
++    IO.mapOptional("CatchMacros", Style.CatchMacros);
+     IO.mapOptional("ColumnLimit", Style.ColumnLimit);
+     IO.mapOptional("CommentPragmas", Style.CommentPragmas);
+     IO.mapOptional("CompactNamespaces", Style.CompactNamespaces);
+@@ -1112,6 +1113,7 @@ template <> struct MappingTraits<FormatStyle> {
+     IO.mapOptional("StatementMacros", Style.StatementMacros);
+     IO.mapOptional("TabWidth", Style.TabWidth);
+     IO.mapOptional("TypeNames", Style.TypeNames);
++    IO.mapOptional("TryMacros", Style.TryMacros);
+     IO.mapOptional("TypenameMacros", Style.TypenameMacros);
+     IO.mapOptional("UseTab", Style.UseTab);
+     IO.mapOptional("VerilogBreakBetweenInstancePorts",
+diff --git a/clang/lib/Format/FormatToken.h b/clang/lib/Format/FormatToken.h
+index dede89f26..8107500c6 100644
+--- a/clang/lib/Format/FormatToken.h
++++ b/clang/lib/Format/FormatToken.h
+@@ -155,6 +155,8 @@ namespace format {
+   TYPE(TrailingAnnotation)                                                     \
+   TYPE(TrailingReturnArrow)                                                    \
+   TYPE(TrailingUnaryOperator)                                                  \
++  TYPE(TryMacro)                                                               \
++  TYPE(CatchMacro)                                                             \
+   TYPE(TypeDeclarationParen)                                                   \
+   TYPE(TypeName)                                                               \
+   TYPE(TypenameMacro)                                                          \
+diff --git a/clang/lib/Format/FormatTokenLexer.cpp b/clang/lib/Format/FormatTokenLexer.cpp
+index 52a55ea23..242ee6aed 100644
+--- a/clang/lib/Format/FormatTokenLexer.cpp
++++ b/clang/lib/Format/FormatTokenLexer.cpp
+@@ -61,6 +61,14 @@ FormatTokenLexer::FormatTokenLexer(
+     auto Identifier = &IdentTable.get(NamespaceMacro);
+     Macros.insert({Identifier, TT_NamespaceMacro});
+   }
++  for (const std::string &TryMacro : Style.TryMacros) {
++    auto Identifier = &IdentTable.get(TryMacro);
++    Macros.insert({Identifier, TT_TryMacro});
++  }
++  for (const std::string &CatchMacro : Style.CatchMacros) {
++    auto Identifier = &IdentTable.get(CatchMacro);
++    Macros.insert({Identifier, TT_CatchMacro});
++  }
+   for (const std::string &WhitespaceSensitiveMacro :
+        Style.WhitespaceSensitiveMacros) {
+     auto Identifier = &IdentTable.get(WhitespaceSensitiveMacro);
+@@ -451,6 +459,10 @@ bool FormatTokenLexer::tryTransformTryUsageForC() {
+   auto &Try = *(Tokens.end() - 2);
+   if (Try->isNot(tok::kw_try))
+     return false;
++  // Don't reset TryMacros back to identifier — they legitimately use kw_try
++  // even when followed by '(' (for macro arguments like JSG_TRY(js)).
++  if (Try->is(TT_TryMacro))
++    return false;
+   auto &Next = *(Tokens.end() - 1);
+   if (Next->isOneOf(tok::l_brace, tok::colon, tok::hash, tok::comment))
+     return false;
+@@ -1324,6 +1336,10 @@ FormatToken *FormatTokenLexer::getNextToken() {
+         // the tok value seems to be needed. Not sure if there's a more elegant
+         // way.
+         FormatTok->Tok.setKind(tok::kw_if);
++      } else if (it->second == TT_TryMacro) {
++        FormatTok->Tok.setKind(tok::kw_try);
++      } else if (it->second == TT_CatchMacro) {
++        FormatTok->Tok.setKind(tok::kw_catch);
+       }
+     } else if (FormatTok->is(tok::identifier)) {
+       if (MacroBlockBeginRegex.match(Text))
+diff --git a/clang/lib/Format/TokenAnnotator.cpp b/clang/lib/Format/TokenAnnotator.cpp
+index 628fe46cc..a9cd61490 100644
+--- a/clang/lib/Format/TokenAnnotator.cpp
++++ b/clang/lib/Format/TokenAnnotator.cpp
+@@ -1701,7 +1701,8 @@ private:
+     if (!CurrentToken->isTypeFinalized() &&
+         !CurrentToken->isOneOf(
+             TT_LambdaLSquare, TT_LambdaLBrace, TT_AttributeMacro, TT_IfMacro,
+-            TT_ForEachMacro, TT_TypenameMacro, TT_FunctionLBrace,
++            TT_ForEachMacro, TT_TypenameMacro, TT_TryMacro, TT_CatchMacro,
++            TT_FunctionLBrace,
+             TT_ImplicitStringLiteral, TT_InlineASMBrace, TT_FatArrow,
+             TT_NamespaceMacro, TT_OverloadedOperator, TT_RegexLiteral,
+             TT_TemplateString, TT_ObjCStringLiteral, TT_UntouchableMacroFunc,
+@@ -4406,6 +4407,11 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
+   if (Left.Finalized)
+     return Right.hasWhitespaceBefore();
+ 
++  // TryMacros/CatchMacros should look like macro invocations, not keywords.
++  // Don't add a space before their argument list.
++  if (Left.isOneOf(TT_TryMacro, TT_CatchMacro) && Right.is(tok::l_paren))
++    return false;
++
+   // Never ever merge two words.
+   if (Keywords.isWordLike(Right) && Keywords.isWordLike(Left))
+     return true;
+diff --git a/clang/lib/Format/UnwrappedLineParser.cpp b/clang/lib/Format/UnwrappedLineParser.cpp
+index 179d77bf0..f199c5ae7 100644
+--- a/clang/lib/Format/UnwrappedLineParser.cpp
++++ b/clang/lib/Format/UnwrappedLineParser.cpp
+@@ -2919,7 +2919,11 @@ FormatToken *UnwrappedLineParser::parseIfThenElse(IfStmtKind *IfKind,
+ 
+ void UnwrappedLineParser::parseTryCatch() {
+   assert(FormatTok->isOneOf(tok::kw_try, tok::kw___try) && "'try' expected");
++  bool IsTryMacro = FormatTok->is(TT_TryMacro);
+   nextToken();
++  // If the try keyword was a macro like JSG_TRY(js), skip its arguments.
++  if (IsTryMacro && FormatTok->is(tok::l_paren))
++    parseParens();
+   bool NeedsUnwrappedLine = false;
+   if (FormatTok->is(tok::colon)) {
+     // We are in a function try block, what comes is an initializer list.
+diff --git a/clang/unittests/Format/ConfigParseTest.cpp b/clang/unittests/Format/ConfigParseTest.cpp
+index 6436581dd..765e17d71 100644
+--- a/clang/unittests/Format/ConfigParseTest.cpp
++++ b/clang/unittests/Format/ConfigParseTest.cpp
+@@ -821,6 +821,18 @@ TEST(ConfigParseTest, ParsesConfiguration) {
+   CHECK_PARSE("NamespaceMacros: [TESTSUITE, SUITE]", NamespaceMacros,
+               std::vector<std::string>({"TESTSUITE", "SUITE"}));
+ 
++  Style.TryMacros.clear();
++  CHECK_PARSE("TryMacros: [KJ_TRY]", TryMacros,
++              std::vector<std::string>{"KJ_TRY"});
++  CHECK_PARSE("TryMacros: [KJ_TRY, JSG_TRY]", TryMacros,
++              std::vector<std::string>({"KJ_TRY", "JSG_TRY"}));
++
++  Style.CatchMacros.clear();
++  CHECK_PARSE("CatchMacros: [KJ_CATCH]", CatchMacros,
++              std::vector<std::string>{"KJ_CATCH"});
++  CHECK_PARSE("CatchMacros: [KJ_CATCH, JSG_CATCH]", CatchMacros,
++              std::vector<std::string>({"KJ_CATCH", "JSG_CATCH"}));
++
+   Style.WhitespaceSensitiveMacros.clear();
+   CHECK_PARSE("WhitespaceSensitiveMacros: [STRINGIZE]",
+               WhitespaceSensitiveMacros, std::vector<std::string>{"STRINGIZE"});
+diff --git a/clang/unittests/Format/FormatTest.cpp b/clang/unittests/Format/FormatTest.cpp
+index 11ae41bc7..e59daebde 100644
+--- a/clang/unittests/Format/FormatTest.cpp
++++ b/clang/unittests/Format/FormatTest.cpp
+@@ -4809,6 +4809,84 @@ TEST_F(FormatTest, FormatTryCatch) {
+   verifyIncompleteFormat("try {} catch (");
+ }
+ 
++TEST_F(FormatTest, TryMacros) {
++  FormatStyle Style = getLLVMStyle();
++  Style.TryMacros.push_back("KJ_TRY");
++  Style.TryMacros.push_back("JSG_TRY");
++  Style.CatchMacros.push_back("KJ_CATCH");
++  Style.CatchMacros.push_back("JSG_CATCH");
++
++  // Basic try-catch macro formatting (catch attaches to closing brace).
++  // No space before '(' — macros look like macro invocations.
++  verifyFormat("KJ_TRY {\n"
++               "  doStuff();\n"
++               "} KJ_CATCH(e) {\n"
++               "  handleError();\n"
++               "}",
++               Style);
++
++  // Try macro with arguments (like JSG_TRY(js)).
++  verifyFormat("JSG_TRY(js) {\n"
++               "  doStuff();\n"
++               "} JSG_CATCH(e) {\n"
++               "  handleError();\n"
++               "}",
++               Style);
++
++  // Variadic catch macro (like JSG_CATCH(exception, ...)).
++  verifyFormat("JSG_TRY(js) {\n"
++               "  doStuff();\n"
++               "} JSG_CATCH(e, js) {\n"
++               "  handleError();\n"
++               "}",
++               Style);
++
++  // Multiple catch blocks.
++  verifyFormat("KJ_TRY {\n"
++               "  doStuff();\n"
++               "} KJ_CATCH(e1) {\n"
++               "  handleError1();\n"
++               "} KJ_CATCH(e2) {\n"
++               "  handleError2();\n"
++               "}",
++               Style);
++
++  // With BeforeCatch = true, catch goes on its own line.
++  FormatStyle WrappedStyle = Style;
++  WrappedStyle.BraceWrapping.BeforeCatch = true;
++  WrappedStyle.BreakBeforeBraces = FormatStyle::BS_Custom;
++  verifyFormat("KJ_TRY {\n"
++               "  doStuff();\n"
++               "}\n"
++               "KJ_CATCH(e) {\n"
++               "  handleError();\n"
++               "}",
++               WrappedStyle);
++
++  // Native try/catch is unaffected by TryMacros/CatchMacros.
++  verifyFormat("try {\n"
++               "  doStuff();\n"
++               "} catch (const std::exception &e) {\n"
++               "  handleError();\n"
++               "}",
++               Style);
++
++  // Try macro with arguments and BeforeCatch = true.
++  verifyFormat("JSG_TRY(js) {\n"
++               "  doStuff();\n"
++               "}\n"
++               "JSG_CATCH(e, js) {\n"
++               "  handleError();\n"
++               "}",
++               WrappedStyle);
++
++  // Empty try-catch bodies.
++  verifyFormat("KJ_TRY {\n"
++               "} KJ_CATCH(e) {\n"
++               "}",
++               Style);
++}
++
+ TEST_F(FormatTest, FormatTryAsAVariable) {
+   verifyFormat("int try;");
+   verifyFormat("int try, size;");
+-- 
+2.43.0
+
