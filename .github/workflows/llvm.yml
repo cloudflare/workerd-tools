@@ -31,6 +31,7 @@ jobs:
   build:
     needs: create-release
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - os: darwin-arm64
