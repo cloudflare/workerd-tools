@@ -124,4 +124,54 @@ jobs:
           done
         env:
           GITHUB_TOKEN: ${{ github.TOKEN }}
+      # Package the slice of LLVM/Clang/clang-tools-extra headers required to build
+      # out-of-tree clang-tidy plugins (e.g. workerd's JsgLint). Generated config
+      # headers under build/ are platform-specific, so we ship one tarball per
+      # platform. The layout inside the tarball mirrors the LLVM source tree so
+      # consumers can simply add -I clang/include -I llvm/include -I build/include
+      # -I build/tools/clang/include -I clang-tools-extra without rewriting paths.
+      - name: Package clang-tidy plugin development headers
+        if: contains(inputs.target, 'clang-tidy')
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE_DIR=$PWD/llvm-$LLVM_VERSION-${{ matrix.platform.os }}-clang-tidy-dev
+          TARBALL=$STAGE_DIR.tar.xz
+          BASENAME=$(basename "$STAGE_DIR")
+          mkdir -p "$STAGE_DIR"
+
+          # Copy headers/.def/.inc from src into dst, preserving the relative
+          # tree. When include_inc is "yes" .def and .inc are included alongside
+          # .h. Implemented with find for portability across the linux, macOS
+          # and Windows (Git-bash) runners.
+          copy_headers() {
+            local src=$1
+            local dst=$2
+            local include_inc=${3:-no}
+            mkdir -p "$dst"
+            local abs_src
+            abs_src=$(cd "$src" && pwd)
+            if [ "$include_inc" = "yes" ]; then
+              (cd "$abs_src" && find . \( -name '*.h' -o -name '*.def' -o -name '*.inc' \) -print0)
+            else
+              (cd "$abs_src" && find . -name '*.h' -print0)
+            fi |
+              while IFS= read -r -d '' f; do
+                mkdir -p "$dst/$(dirname "$f")"
+                cp "$abs_src/$f" "$dst/$f"
+              done
+          }
+
+          copy_headers llvm/clang/include             "$STAGE_DIR/clang/include"             yes
+          copy_headers llvm/llvm/include              "$STAGE_DIR/llvm/include"              yes
+          copy_headers llvm/build/include             "$STAGE_DIR/build/include"             yes
+          copy_headers llvm/build/tools/clang/include "$STAGE_DIR/build/tools/clang/include" yes
+          # clang-tools-extra/clang-tidy carries the plugin API as plain .h files
+          # within the source tree (no install target ships them).
+          copy_headers llvm/clang-tools-extra/clang-tidy "$STAGE_DIR/clang-tools-extra/clang-tidy"
+
+          tar -C "$(dirname "$STAGE_DIR")" -cJf "$TARBALL" "$BASENAME"
+          gh release upload -R ${{ github.repository }} ${{ inputs.target }}-$LLVM_VERSION "$TARBALL" || true
+        env:
+          GITHUB_TOKEN: ${{ github.TOKEN }}
 
