@@ -18,7 +18,7 @@ env:
   LLVM_TARGETS: ${{ inputs.target }}
   LLVM_BINS: ${{ inputs.target }}
   LLVM_LIBS: ''
-  ZIG_VERSION: '0.15.2'
+  ZIG_VERSION: '0.16.0'
 jobs:
   create-release:
     runs-on: ubuntu-latest
@@ -43,7 +43,7 @@ jobs:
             LLVM_TARGETS_TO_BUILD: 'AArch64'
           - os: linux-amd64
             runner: ubuntu-22.04
-            toolchain: default
+            toolchain: clang-lld-linux-amd64
             BIN_SUFFIX: ''
             SO_SUFFIX: 'so.${{ inputs.version }}'
             STATIC_LIB_SUFFIX: 'a'
@@ -67,7 +67,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     name: ${{ matrix.platform.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup for macOS
         if: runner.os == 'macOS'
         run: |
