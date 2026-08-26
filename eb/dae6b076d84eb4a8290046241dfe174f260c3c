@@ -1,0 +1,19 @@
+build/llvm/clang-lld-linux.cmake
+  s_e6a5c0462cb703::t_abecbc0a6f1f6a 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ebdae6b076d84eb4a8290046241dfe174f260c3c",
+  "prompts": {},
+  "sessions": {
+    "s_e6a5c0462cb703": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fc1e5ba46ffe7dDRaFouyD8Ggy",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Felix Hanau <felix@cloudflare.com>"
+    }
+  }
+}
