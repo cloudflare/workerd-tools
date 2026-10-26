@@ -29,7 +29,14 @@ jobs:
           gh release create -R ${{ github.repository }} $RELEASE_NAME || true
           
           # Excludes ~70% of files, making this archive faster to process
-          git archive --prefix=$RELEASE_NAME/ -o $RELEASE_NAME.tar.gz HEAD ':(exclude)css' ':(exclude)html' ':(exclude)conformance-checkers' ':(exclude)svg'
+          EXCLUDES=(':(exclude)css' ':(exclude)conformance-checkers' ':(exclude)svg')
+          # Keep html/webappapis but exclude the rest of html/. A pathspec
+          # exclude can't be undone by a later include, so exclude each
+          # other top-level entry of html/ individually.
+          while IFS= read -r -d '' ENTRY; do
+            [[ "$ENTRY" == 'html/webappapis' ]] || EXCLUDES+=(":(exclude,literal)$ENTRY")
+          done < <(git ls-tree -z --name-only HEAD html/)
+          git archive --prefix=$RELEASE_NAME/ -o $RELEASE_NAME.tar.gz HEAD "${EXCLUDES[@]}"
           
           gh release upload -R ${{ github.repository }} $RELEASE_NAME $RELEASE_NAME.tar.gz
         env:
