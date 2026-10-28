@@ -36,7 +36,10 @@ jobs:
           while IFS= read -r -d '' ENTRY; do
             [[ "$ENTRY" == 'html/webappapis' ]] || EXCLUDES+=(":(exclude,literal)$ENTRY")
           done < <(git ls-tree -z --name-only HEAD html/)
-          git archive --prefix=$RELEASE_NAME/ -o $RELEASE_NAME.tar.gz HEAD "${EXCLUDES[@]}"
+          # REVISION holds the full hash of the commit, which the release name abbreviates.
+          # --add-virtual-file needs git 2.38 or later.
+          git archive --prefix=$RELEASE_NAME/ --add-virtual-file="$RELEASE_NAME/REVISION:$(git rev-parse HEAD)" \
+            -o $RELEASE_NAME.tar.gz HEAD "${EXCLUDES[@]}"
           
           gh release upload -R ${{ github.repository }} $RELEASE_NAME $RELEASE_NAME.tar.gz
         env:
